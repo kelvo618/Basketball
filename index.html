@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arcade Basketball Challenge</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+        }
+        body {
+            background: linear-gradient(135deg, #0f172a, #1e293b);
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+            border-radius: 16px;
+            overflow: hidden;
+            background: #111;
+        }
+        canvas {
+            display: block;
+            background: radial-gradient(circle at 50% 30%, #2a324b, #0f131d);
+            cursor: grab;
+        }
+        canvas:active {
+            cursor: grabbing;
+        }
+        .ui-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            right: 20px;
+            display: flex;
+            justify-content: space-between;
+            pointer-events: none;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .stat-box {
+            background: rgba(15, 23, 42, 0.75);
+            backdrop-filter: blur(8px);
+            padding: 10px 18px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .stat-label {
+            font-size: 11px;
+            color: #94a3b8;
+            margin-bottom: 2px;
+        }
+        .stat-value {
+            font-size: 22px;
+            color: #f8fafc;
+        }
+        #streak-box .stat-value {
+            color: #f59e0b;
+        }
+        #game-over-screen {
+            position: absolute;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.9);
+            backdrop-filter: blur(10px);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.4s ease;
+        }
+        #game-over-screen.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        h1 {
+            font-size: 42px;
+            margin-bottom: 10px;
+            color: #f97316;
+            text-shadow: 0 0 20px rgba(249, 115, 22, 0.4);
+        }
+        .final-score {
+            font-size: 18px;
+            color: #cbd5e1;
+            margin-bottom: 25px;
+        }
+        .btn {
+            background: linear-gradient(135deg, #f97316, #ea580c);
+            color: white;
+            border: none;
+            padding: 12px 32px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 30px;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(249, 115, 22, 0.4);
+            transition: all 0.2s ease;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(249, 115, 22, 0.6);
+        }
+        .btn:active {
+            transform: translateY(1px);
+        }
+        .instructions {
+            margin-top: 15px;
+            font-size: 13px;
+            color: #64748b;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas" width="480" height="680"></canvas>
+        
+        <div class="ui-overlay">
+            <div class="stat-box">
+                <div class="stat-label">SCORE</div>
+                <div class="stat-value" id="score">0</div>
+            </div>
+            <div class="stat-box" id="streak-box">
+                <div class="stat-label">STREAK</div>
+                <div class="stat-value" id="streak">0x</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">TIME</div>
+                <div class="stat-value" id="timer">45s</div>
+            </div>
+        </div>
+
+        <div id="game-over-screen">
+            <h1>TIME'S UP!</h1>
+            <div class="final-score" id="final-score-text">You scored 0 points!</div>
+            <button class="btn" onclick="resetGame()">PLAY AGAIN</button>
+        </div>
+    </div>
+
+    <div class="instructions">Click/Touch and drag the ball backward to aim & release to shoot!</div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // UI Elements
+        const scoreEl = document.getElementById('score');
+        const streakEl = document.getElementById('streak');
+        const timerEl = document.getElementById('timer');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const finalScoreText = document.getElementById('final-score-text');
+
+        // Audio Effects using Web Audio API
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playSound(freq, duration, type = 'sine') {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + duration);
+        }
+
+        // Game State Variables
+        let score = 0;
+        let streak = 0;
+        let timeLeft = 45;
+        let gameActive = true;
+        let timerInterval;
+
+        // Hoop Setup
+        const hoop = {
+            x: canvas.width / 2,
+            y: 180,
+            radius: 38,
+            backboardWidth: 120,
+            backboardHeight: 80,
+            rimY: 180,
+            rimThickness: 7
+        };
+
+        // Ball Setup
+        const ballDefault = {
+            x: canvas.width / 2,
+            y: canvas.height - 100,
+            radius: 20,
+            vx: 0,
+            vy: 0,
+            vz: 0, // Depth scale
+            z: 1,  // Visual scale factor
+            gravity: 0.4,
+            bounce: 0.65,
+            isDragging: false,
+            isShot: false,
+            hasScored: false
+        };
+        let ball = { ...ballDefault };
+
+        // Mouse/Touch Drag state
+        let dragStart = { x: 0, y: 0 };
+        let dragCurrent = { x: 0, y: 0 };
+
+        // Particles
+        let particles = [];
+
+        function createParticles(x, y, color, count = 15) {
+            for (let i = 0; i < count; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: (Math.random() - 0.5) * 8,
+                    vy: (Math.random() - 0.5) * 8,
+                    radius: Math.random() * 4 + 2,
+                    color: color,
+                    alpha: 1,
+                    life: 0.03
+                });
+            }
+        }
+
+        function startTimer() {
+            clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                if (gameActive) {
+                    timeLeft--;
+                    timerEl.innerText = `${timeLeft}s`;
+                    if (timeLeft <= 0) endGame();
+                }
+            }, 1000);
+        }
+
+        function endGame() {
+            gameActive = false;
+            clearInterval(timerInterval);
+            finalScoreText.innerText = `You scored ${score} points!`;
+            gameOverScreen.classList.add('active');
+        }
+
+        function resetGame() {
+            score = 0;
+            streak = 0;
+            timeLeft = 45;
+            gameActive = true;
+            scoreEl.innerText = score;
+            streakEl.innerText = '0x';
+            timerEl.innerText = `${timeLeft}s`;
+            gameOverScreen.classList.remove('active');
+            resetBall();
+            startTimer();
+        }
+
+        function resetBall() {
+            ball.x = ballDefault.x + (Math.random() * 80 - 40); // Randomize shot position slightly
+            ball.y = ballDefault.y;
+            ball.vx = 0;
+            ball.vy = 0;
+            ball.z = 1;
+            ball.isShot = false;
+            ball.isDragging = false;
+            ball.hasScored = false;
+        }
+
+        // Input Handling
+        function onPointerDown(e) {
+            if (!gameActive || ball.isShot) return;
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = (e.clientX || e.touches[0].clientX) - rect.left;
+            const mouseY = (e.clientY || e.touches[0].clientY) - rect.top;
+
+            const dist = Math.hypot(mouseX - ball.x, mouseY - ball.y);
+            if (dist < ball.radius * 2) {
+                ball.isDragging = true;
+                dragStart = { x: mouseX, y: mouseY };
+                dragCurrent = { x: mouseX, y: mouseY };
+            }
+        }
+
+        function onPointerMove(e) {
+            if (!ball.isDragging) return;
+            const rect = canvas.getBoundingClientRect();
+            dragCurrent.x = (e.clientX || e.touches[0].clientX) - rect.left;
+            dragCurrent.y = (e.clientY || e.touches[0].clientY) - rect.top;
+        }
+
+        function onPointerUp() {
+            if (!ball.isDragging) return;
+            ball.isDragging = false;
+            ball.isShot = true;
+
+            const dx = dragStart.x - dragCurrent.x;
+            const dy = dragStart.y - dragCurrent.y;
+
+            // Shoot physics impulse
+            ball.vx = dx * 0.12;
+            ball.vy = dy * 0.14;
+            playSound(300, 0.1, 'triangle');
+        }
+
+        canvas.addEventListener('mousedown', onPointerDown);
+        canvas.addEventListener('mousemove', onPointerMove);
+        window.addEventListener('mouseup', onPointerUp);
+
+        canvas.addEventListener('touchstart', onPointerDown);
+        canvas.addEventListener('touchmove', onPointerMove);
+        window.addEventListener('touchend', onPointerUp);
+
+        // Physics Updates
+        function update() {
+            if (ball.isShot) {
+                ball.x += ball.vx;
+                ball.y += ball.vy;
+                ball.vy += ball.gravity;
+
+                // Simulated 3D arc trajectory scale reduction
+                if (ball.vy < 0) {
+                    ball.z = Math.max(0.65, ball.z - 0.008);
+                } else {
+                    ball.z = Math.min(1.0, ball.z + 0.004);
+                }
+
+                const currentRadius = ball.radius * ball.z;
+
+                // Rim positions (Left and Right Rim Pins)
+                const rimLeft = hoop.x - hoop.radius;
+                const rimRight = hoop.x + hoop.radius;
+
+                // Rim Collision Detection
+                [rimLeft, rimRight].forEach(rimX => {
+                    const dist = Math.hypot(ball.x - rimX, ball.y - hoop.rimY);
+                    if (dist < currentRadius + hoop.rimThickness) {
+                        ball.vx *= -ball.bounce;
+                        ball.vy *= -ball.bounce;
+                        playSound(150, 0.08, 'square'); // Bounce sound
+                    }
+                });
+
+                // Backboard Collision
+                const bbLeft = hoop.x - hoop.backboardWidth / 2;
+                const bbRight = hoop.x + hoop.backboardWidth / 2;
+                const bbTop = hoop.rimY - hoop.backboardHeight + 10;
+
+                if (ball.x > bbLeft && ball.x < bbRight && ball.y < hoop.rimY && ball.y > bbTop) {
+                    if (ball.z <= 0.75 && ball.vy < 0) {
+                        ball.vy = -ball.vy * 0.5;
+                        ball.vx *= 0.5;
+                        playSound(180, 0.1, 'square');
+                    }
+                }
+
+                // Check Scoring condition
+                if (!ball.hasScored && ball.vy > 0 && Math.abs(ball.x - hoop.x) < hoop.radius - 8 && Math.abs(ball.y - hoop.rimY) < 12) {
+                    ball.hasScored = true;
+                    streak++;
+                    const addedScore = 2 * (streak > 1 ? streak : 1);
+                    score += addedScore;
+
+                    scoreEl.innerText = score;
+                    streakEl.innerText = `${streak}x`;
+
+                    createParticles(hoop.x, hoop.rimY, '#f97316', 25);
+                    playSound(523.25, 0.2, 'sine'); // Success chord node
+                    setTimeout(() => playSound(659.25, 0.2, 'sine'), 100);
+                }
+
+                // Out of Bounds / Reset trigger
+                if (ball.y > canvas.height + 50 || ball.x < -50 || ball.x > canvas.width + 50) {
+                    if (!ball.hasScored) {
+                        streak = 0;
+                        streakEl.innerText = '0x';
+                    }
+                    resetBall();
+                }
+            }
+
+            // Update Particle Animations
+            particles.forEach((p, idx) => {
+                p.x += p.vx;
+                p.y += p.vy;
+                p.alpha -= p.life;
+                if (p.alpha <= 0) particles.splice(idx, 1);
+            });
+        }
+
+        // Render Functions
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Court Line Accents
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.arc(canvas.width / 2, canvas.height + 100, 280, Math.PI, 0);
+            ctx.stroke();
+
+            // Draw Backboard
+            const bbLeft = hoop.x - hoop.backboardWidth / 2;
+            const bbTop = hoop.rimY - hoop.backboardHeight + 10;
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(bbLeft, bbTop, hoop.backboardWidth, hoop.backboardHeight);
+            ctx.strokeStyle = '#cbd5e1';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(bbLeft, bbTop, hoop.backboardWidth, hoop.backboardHeight);
+
+            // Inner Backboard Square
+            ctx.strokeStyle = '#ef4444';
+            ctx.strokeRect(hoop.x - 22, hoop.rimY - 40, 44, 35);
+
+            // Draw Aim Guide Trajectory Line
+            if (ball.isDragging) {
+                const dx = dragStart.x - dragCurrent.x;
+                const dy = dragStart.y - dragCurrent.y;
+
+                ctx.strokeStyle = 'rgba(249, 115, 22, 0.5)';
+                ctx.lineWidth = 3;
+                ctx.setLineDash([6, 6]);
+                ctx.beginPath();
+                ctx.moveTo(ball.x, ball.y);
+                ctx.lineTo(ball.x + dx * 2, ball.y + dy * 2);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            // Draw Rim (Back Rim)
+            ctx.strokeStyle = '#ea580c';
+            ctx.lineWidth = hoop.rimThickness;
+            ctx.beginPath();
+            ctx.arc(hoop.x, hoop.rimY, hoop.radius, 0, Math.PI);
+            ctx.stroke();
+
+            // Draw Net
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            for (let i = -hoop.radius + 4; i <= hoop.radius - 4; i += 8) {
+                ctx.moveTo(hoop.x + i, hoop.rimY);
+                ctx.lineTo(hoop.x + i * 0.6, hoop.rimY + 35);
+            }
+            ctx.stroke();
+
+            // Draw Particles
+            particles.forEach(p => {
+                ctx.save();
+                ctx.globalAlpha = p.alpha;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            });
+
+            // Draw Ball
+            const currentRadius = ball.radius * ball.z;
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, currentRadius, 0, Math.PI * 2);
+            ctx.fillStyle = '#f97316';
+            ctx.fill();
+            ctx.strokeStyle = '#c2410c';
+            ctx.lineWidth = 2 * ball.z;
+            ctx.stroke();
+
+            // Ball Seam Details
+            ctx.strokeStyle = '#431407';
+            ctx.lineWidth = 1.5 * ball.z;
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, currentRadius, -Math.PI / 4, Math.PI / 4);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, currentRadius, (3 * Math.PI) / 4, (5 * Math.PI) / 4);
+            ctx.stroke();
+            ctx.restore();
+
+            // Draw Rim (Front Rim Overlay)
+            ctx.strokeStyle = '#f97316';
+            ctx.lineWidth = hoop.rimThickness;
+            ctx.beginPath();
+            ctx.arc(hoop.x, hoop.rimY, hoop.radius, 0, Math.PI);
+            ctx.stroke();
+        }
+
+        // Game Loop
+        function loop() {
+            update();
+            draw();
+            requestAnimationFrame(loop);
+        }
+
+        // Initialize Game
+        startTimer();
+        loop();
+    </script>
+</body>
+  </html>
+  
